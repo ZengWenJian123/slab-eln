@@ -1,0 +1,298 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+enum RecordStatus {
+  SUCCESS
+  FAILED
+}
+
+enum SampleState {
+  GC
+  GR
+}
+
+enum RelatedType {
+  SAMPLE
+  ARC_BATCH
+  SPINNING_BATCH
+  TEST_RECORD
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  uuid         String   @unique @default(uuid())
+  username     String   @unique
+  passwordHash String   @map("password_hash")
+  realName     String   @map("real_name")
+  role         Role     @default(OPERATOR)
+  status       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  createdAlloyDesigns       AlloyDesign[]
+  createdArcMeltingBatches  ArcMeltingBatch[]
+  createdSpinningBatches    SpinningBatch[]
+  createdSamples            Sample[]
+  createdPostTreatments     PostTreatmentRecord[]
+  uploadedAttachments       Attachment[]
+  uploadedImages            ImageAsset[]
+  operationLogs             OperationLog[]
+
+  @@map("users")
+}
+
+model DictionaryItem {
+  id        Int      @id @default(autoincrement())
+  uuid      String   @unique @default(uuid())
+  dictType  String   @map("dict_type")
+  dictLabel String   @map("dict_label")
+  dictValue String   @map("dict_value")
+  sortOrder Int      @default(0) @map("sort_order")
+  status    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  arcFailureItems   ArcMeltingBatch[]   @relation("ArcFailureReason")
+  spinFailureItems  SpinningBatch[]     @relation("SpinFailureReason")
+  postFailureItems  PostTreatmentRecord[] @relation("PostFailureReason")
+  testFailureItems  TestRecord[]        @relation("TestFailureReason")
+
+  @@index([dictType, status])
+  @@unique([dictType, dictValue], name: "dictType_dictValue")
+  @@map("dictionary_items")
+}
+
+model AlloyDesign {
+  id              Int      @id @default(autoincrement())
+  uuid            String   @unique @default(uuid())
+  code            String   @unique
+  compositionJson Json     @map("composition_json")
+  totalPercent    Float    @map("total_percent")
+  remark          String?
+  createdBy       Int      @map("created_by")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  creator            User               @relation(fields: [createdBy], references: [id])
+  arcMeltingBatches  ArcMeltingBatch[]
+  spinningBatches    SpinningBatch[]
+  samples            Sample[]
+
+  @@map("alloy_designs")
+}
+
+model ArcMeltingBatch {
+  id            Int          @id @default(autoincrement())
+  uuid          String       @unique @default(uuid())
+  batchNo       String       @unique @map("batch_no")
+  alloyDesignId Int          @map("alloy_design_id")
+  meltingDate   DateTime     @map("melting_date")
+  targetWeight  Float        @map("target_weight")
+  ingotWeight   Float        @map("ingot_weight")
+  meltingPoint  Float?       @map("melting_point")
+  lossRate      Float        @map("loss_rate")
+  status        RecordStatus
+  failureReasonId Int?       @map("failure_reason_id")
+  remark        String?
+  createdBy     Int          @map("created_by")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  alloyDesign   AlloyDesign  @relation(fields: [alloyDesignId], references: [id])
+  failureReason DictionaryItem? @relation("ArcFailureReason", fields: [failureReasonId], references: [id])
+  creator       User         @relation(fields: [createdBy], references: [id])
+  spinningBatches SpinningBatch[]
+  samples       Sample[]
+
+  @@index([batchNo, meltingDate])
+  @@map("arc_melting_batches")
+}
+
+model SpinningBatch {
+  id                    Int          @id @default(autoincrement())
+  uuid                  String       @unique @default(uuid())
+  batchNo               String       @unique @map("batch_no")
+  alloyDesignId         Int          @map("alloy_design_id")
+  arcBatchId            Int          @map("arc_batch_id")
+  spinningDate          DateTime     @map("spinning_date")
+  glassTubeDiameter     Float        @map("glass_tube_diameter")
+  feedWeight            Float        @map("feed_weight")
+  spinningTemperature   Float        @map("spinning_temperature")
+  windingSpeedRpm       Float        @map("winding_speed_rpm")
+  coolingWaterTemp      Float        @map("cooling_water_temp")
+  negativePressureKpa   Float        @map("negative_pressure_kpa")
+  coatedWireDiameterUm  Float        @map("coated_wire_diameter_um")
+  bareWireDiameterUm    Float        @map("bare_wire_diameter_um")
+  glassEtchTime         Float        @map("glass_etch_time")
+  glassThicknessUm      Float        @map("glass_thickness_um")
+  needMagneticTest      Boolean      @default(false) @map("need_magnetic_test")
+  status                RecordStatus
+  failureReasonId       Int?         @map("failure_reason_id")
+  remark                String?
+  createdBy             Int          @map("created_by")
+  createdAt             DateTime     @default(now()) @map("created_at")
+  updatedAt             DateTime     @updatedAt @map("updated_at")
+
+  alloyDesign           AlloyDesign  @relation(fields: [alloyDesignId], references: [id])
+  arcBatch              ArcMeltingBatch @relation(fields: [arcBatchId], references: [id])
+  failureReason         DictionaryItem? @relation("SpinFailureReason", fields: [failureReasonId], references: [id])
+  creator               User         @relation(fields: [createdBy], references: [id])
+  samples               Sample[]
+
+  @@index([batchNo, spinningDate])
+  @@map("spinning_batches")
+}
+
+model Sample {
+  id                  Int         @id @default(autoincrement())
+  uuid                String      @unique @default(uuid())
+  sampleNo            String      @unique @map("sample_no")
+  displayName         String      @map("display_name")
+  alloyDesignId       Int         @map("alloy_design_id")
+  arcBatchId          Int         @map("arc_batch_id")
+  spinningBatchId     Int         @map("spinning_batch_id")
+  state               SampleState
+  bareWireDiameterUm  Float       @map("bare_wire_diameter_um")
+  coatedWireDiameterUm Float      @map("coated_wire_diameter_um")
+  isWelded2cm         Boolean     @default(false) @map("is_welded_2cm")
+  sampleIndex         Int         @map("sample_index")
+  remark              String?
+  createdBy           Int         @map("created_by")
+  createdAt           DateTime    @default(now()) @map("created_at")
+  updatedAt           DateTime    @updatedAt @map("updated_at")
+
+  alloyDesign         AlloyDesign @relation(fields: [alloyDesignId], references: [id])
+  arcBatch            ArcMeltingBatch @relation(fields: [arcBatchId], references: [id])
+  spinningBatch       SpinningBatch @relation(fields: [spinningBatchId], references: [id])
+  creator             User        @relation(fields: [createdBy], references: [id])
+  postTreatments      PostTreatmentRecord[]
+  testRecords         TestRecord[]
+  imageAssets         ImageAsset[]
+
+  @@index([displayName, sampleNo, alloyDesignId, arcBatchId, spinningBatchId])
+  @@map("samples")
+}
+
+model PostTreatmentRecord {
+  id                  Int          @id @default(autoincrement())
+  uuid                String       @unique @default(uuid())
+  sampleId            Int          @map("sample_id")
+  treatmentType       String       @map("treatment_type")
+  treatmentParamsJson Json         @map("treatment_params_json")
+  status              RecordStatus
+  failureReasonId     Int?         @map("failure_reason_id")
+  remark              String?
+  createdBy           Int          @map("created_by")
+  treatedAt           DateTime     @map("treated_at")
+  createdAt           DateTime     @default(now()) @map("created_at")
+  updatedAt           DateTime     @updatedAt @map("updated_at")
+
+  sample              Sample       @relation(fields: [sampleId], references: [id])
+  failureReason       DictionaryItem? @relation("PostFailureReason", fields: [failureReasonId], references: [id])
+  creator             User         @relation(fields: [createdBy], references: [id])
+
+  @@map("post_treatment_records")
+}
+
+model TestRecord {
+  id                  Int          @id @default(autoincrement())
+  uuid                String       @unique @default(uuid())
+  recordNo            String       @unique @map("record_no")
+  sampleId            Int          @map("sample_id")
+  testDate            DateTime     @map("test_date")
+  operatorName        String       @map("operator_name")
+  instrumentName      String       @map("instrument_name")
+  testCondition       String       @map("test_condition")
+  keyResults          String       @map("key_results")
+  rawFileAttachmentId Int?         @map("raw_file_attachment_id")
+  status              RecordStatus
+  failureReasonId     Int?         @map("failure_reason_id")
+  remark              String?
+  createdAt           DateTime     @default(now()) @map("created_at")
+  updatedAt           DateTime     @updatedAt @map("updated_at")
+
+  sample              Sample       @relation(fields: [sampleId], references: [id])
+  rawFileAttachment   Attachment?  @relation(fields: [rawFileAttachmentId], references: [id])
+  failureReason       DictionaryItem? @relation("TestFailureReason", fields: [failureReasonId], references: [id])
+  imageAssets         ImageAsset[]
+
+  @@index([sampleId, testDate])
+  @@map("test_records")
+}
+
+model Attachment {
+  id           Int       @id @default(autoincrement())
+  uuid         String    @unique @default(uuid())
+  fileName     String    @map("file_name")
+  originalName String    @map("original_name")
+  storagePath  String    @map("storage_path")
+  fileSize     Int       @map("file_size")
+  mimeType     String    @map("mime_type")
+  relatedType  RelatedType @map("related_type")
+  relatedId    Int       @map("related_id")
+  uploadedBy   Int       @map("uploaded_by")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  uploader     User      @relation(fields: [uploadedBy], references: [id])
+  testRecords  TestRecord[]
+
+  @@map("attachments")
+}
+
+model ImageAsset {
+  id           Int       @id @default(autoincrement())
+  uuid         String    @unique @default(uuid())
+  fileName     String    @map("file_name")
+  originalName String    @map("original_name")
+  storagePath  String    @map("storage_path")
+  thumbnailPath String?  @map("thumbnail_path")
+  fileSize     Int       @map("file_size")
+  mimeType     String    @map("mime_type")
+  category     String
+  stage        String
+  relatedType  RelatedType @map("related_type")
+  relatedId    Int       @map("related_id")
+  sampleId     Int?      @map("sample_id")
+  testRecordId Int?      @map("test_record_id")
+  tagsJson     Json?     @map("tags_json")
+  remark       String?
+  capturedAt   DateTime? @map("captured_at")
+  uploadedBy   Int       @map("uploaded_by")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  sample       Sample?   @relation(fields: [sampleId], references: [id])
+  testRecord   TestRecord? @relation(fields: [testRecordId], references: [id])
+  uploader     User      @relation(fields: [uploadedBy], references: [id])
+
+  @@index([sampleId, category, stage, capturedAt, uploadedBy])
+  @@map("image_assets")
+}
+
+model OperationLog {
+  id            Int      @id @default(autoincrement())
+  uuid          String   @unique @default(uuid())
+  module        String
+  operationType String   @map("operation_type")
+  relatedType   String   @map("related_type")
+  relatedId     Int      @map("related_id")
+  operatorId    Int      @map("operator_id")
+  content       String
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  operator      User     @relation(fields: [operatorId], references: [id])
+
+  @@map("operation_logs")
+}

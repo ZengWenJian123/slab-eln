@@ -1,658 +1,1305 @@
-实验室电子记录与信息管理系统（ELN & LIMS）技术文档
+下面是基于你前面 PRD、UI 设计文档和约束整理出的 **技术文档**。
+我会严格按你的要求来写：
 
-版本：V1.0
-适用范围：一期开发 / 本地部署 / 交付 Codex 实现
-技术原则：成熟框架优先、单仓库优先、本地服务优先、低运维复杂度
+* 尽可能使用成熟框架和开源组件
+* 不让 Codex 造轮子
+* 所有前后端和服务都本地部署
+* 不额外扩展业务功能，只做技术落地方案
 
-1. 技术目标
+---
 
-本系统需要满足以下技术目标：
+# 实验图片记录管理系统技术文档
 
-支持实验流程类后台系统的完整 CRUD、检索、追溯与导出
-支持复杂表单、自动计算、状态流转、失败原因强校验
-支持本地文件上传、样品绑定、原始数据解析和结果回写
-所有核心服务本地部署，不依赖云厂商托管能力
-不重复造轮子，优先采用成熟的开源框架和现成组件
-代码结构清晰，方便 Codex 生成后继续人工维护
-2. 总体技术路线
-2.1 总体方案
+## 1. 文档目标
 
-本项目采用单仓库、本地服务化、前后端一体化方案：
+本文档用于指导 Codex 按统一技术方案实现一个适用于小型实验室的 **实验图片记录管理系统**。
+系统以 Web 方式提供，围绕实验样品、实验过程记录、图片归档、性能测试记录进行建设。
 
-前端：Next.js
-后端：Next.js App Router + Route Handlers + Server Actions
-数据库：MySQL（本地部署）
-ORM：Prisma
-鉴权：Auth.js
-UI：shadcn/ui + Tailwind CSS
-表单：React Hook Form + Zod
-表格：TanStack Table
-队列与后台任务：BullMQ + Redis（本地部署）
-文件存储：本地文件系统
-图表：Apache ECharts
-CSV 解析预览：Papa Parse
-上传交互：react-dropzone
+本文档重点解决以下问题：
 
-Next.js 官方文档当前将 App Router 作为主路线，支持基于文件系统的路由，并结合 Server Components、Suspense、Server Functions 等能力；Route Handlers 用于在 app 目录内创建请求处理逻辑，适合本项目的前后端一体化实现。
+1. 采用什么技术栈
+2. 系统如何分层
+3. 数据库如何设计
+4. 文件和图片如何存储
+5. 页面与接口如何组织
+6. 本地部署如何落地
+7. Codex 开发时应遵守哪些实现边界
 
-3. 选型原则
-3.1 选型原则
-成熟：优先选社区广泛使用、文档完善、维护活跃的开源项目
-本地可运行：必须支持在实验室服务器或开发机本地部署
-与 Next.js 兼容好：减少集成成本
-避免重复造轮子：认证、表单、表格、队列、图表、上传等都优先用现成方案
-适合后台系统：不是官网，不以动画和展示为主
-3.2 明确禁止 Codex 手搓的内容
+---
 
-以下能力不允许 Codex 自己造轮子，必须用成熟库：
+# 2. 项目范围
 
-认证与会话管理
-ORM 与数据库迁移
-表单状态管理与校验
-数据表格
-队列系统
-文件拖拽上传交互
-图表
-CSV 解析
-UI 基础组件库
-日期选择、弹窗、抽屉、提示消息等基础交互
-4. 技术架构
-4.1 逻辑架构
-┌─────────────────────────────────────────────────────────────┐
-│                        Browser / Web UI                    │
-│ Next.js App Router + shadcn/ui + Tailwind + RHF + Zod     │
-└─────────────────────────────────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     Next.js Application                    │
-│  Pages / Layouts / Route Handlers / Server Actions        │
-│  Auth.js / Prisma Client / Domain Services                │
-└─────────────────────────────────────────────────────────────┘
-                 │                    │                   │
-                 ▼                    ▼                   ▼
-      ┌────────────────┐   ┌──────────────────┐  ┌──────────────────┐
-      │ MySQL          │   │ Local File Store │  │ Redis (local)    │
-      │ business data  │   │ uploads/raw-data │  │ BullMQ backend   │
-      └────────────────┘   └──────────────────┘  └──────────────────┘
-                                                          │
-                                                          ▼
-                                              ┌──────────────────────┐
-                                              │ Worker Process       │
-                                              │ BullMQ Worker        │
-                                              │ Python Script Runner │
-                                              └──────────────────────┘
-4.2 部署形态
+## 2.1 当前阶段目标
 
-推荐采用以下本地部署形态：
+当前阶段仅实现以下核心能力：
 
-web：Next.js 应用
-mysql：MySQL 服务
-redis：Redis 服务
-worker：BullMQ Worker + Python 脚本执行进程
-uploads：本地目录挂载
-说明
+* 用户登录
+* 成分设计管理
+* 熔炼批次管理
+* 拉丝批次管理
+* 样品管理
+* 后处理记录管理
+* 性能测试记录管理
+* 图片上传、预览、检索
+* 数据字典管理
+* 用户管理
+* 样品全链路追溯查看
 
-这仍然是一个本地部署的单系统，不是云架构，也不是微服务拆分。
-增加 Redis 和 Worker 的原因只有一个：用成熟方案处理“原始数据解析任务”，避免 Codex 手写任务轮询、状态机、重试器。
+## 2.2 当前阶段不做
 
-BullMQ 官方文档说明它是构建在 Redis 之上的 Node.js 队列系统；其快速开始文档也明确要求本地运行 Redis，并使用 Queue / Worker 模式处理任务。
+为了避免系统复杂化，当前阶段明确不做：
 
-5. 推荐技术栈
-5.1 前端
-基础框架
-next
-react
-react-dom
-typescript
+* 微服务拆分
+* 云存储
+* 云数据库
+* 云函数
+* 消息中间件集群
+* 工作流引擎
+* 自研动态表单平台
+* 自研权限框架
+* 自研图片编辑器
+* 实时设备接入
+* AI 图像分析
+* 自动脚本调度平台
 
-Next.js 是用于构建全栈 Web 应用的 React 框架，并自动配置底层构建工具；App Router 是当前主路径。
+---
 
-UI 与样式
-tailwindcss
-shadcn/ui
-lucide-react
+# 3. 总体技术架构
 
-shadcn/ui 官方文档将其定位为一套可定制、可扩展、开源且开放源码的组件体系，并明确支持与 React/Next.js 一起使用；其组件目录已覆盖 Sidebar、Table、Dialog、Form、Select、Tabs、Sheet、Calendar 等后台常用组件。
+## 3.1 架构原则
 
-表单
-react-hook-form
-zod
+本项目采用 **单体式本地部署架构**，优先保证：
 
-React Hook Form 官方文档强调其“performant, flexible and extensible”，适合复杂表单；Zod 是 TypeScript-first 的验证库，支持从简单字符串到复杂嵌套对象的 schema 定义，适合前后端统一校验。
+* 简单
+* 稳定
+* 易维护
+* 易生成
+* 易被 Codex 正确实现
 
-表格
-@tanstack/react-table
+## 3.2 总体架构图
 
-TanStack Table 适合实现排序、过滤、分页和复杂表格逻辑；shadcn/ui 的 Table / Data Table 文档也明确建议与 @tanstack/react-table 组合。
+```text
+┌──────────────────────────────────────────────────────────────┐
+│                        浏览器 / Web 前端                     │
+│                    Next.js + Ant Design                      │
+└──────────────────────────────────────────────────────────────┘
+                              │
+                              │ HTTP
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│                    Web 应用服务（单体）                      │
+│                Next.js App Router + Route Handlers           │
+│                                                              │
+│  包含：                                                      │
+│  - 页面渲染                                                   │
+│  - API 接口                                                   │
+│  - 登录鉴权                                                   │
+│  - 表单校验                                                   │
+│  - 文件上传                                                   │
+│  - 图片访问                                                   │
+│  - 业务逻辑                                                   │
+└──────────────────────────────────────────────────────────────┘
+                 │                              │
+                 │                              │
+                 ▼                              ▼
+┌───────────────────────────┐     ┌────────────────────────────┐
+│         MySQL             │     │ 本地文件存储 / NAS 挂载目录 │
+│   结构化业务数据存储       │     │ 图片/附件原始文件存储       │
+└───────────────────────────┘     └────────────────────────────┘
+```
 
-数据请求与前端缓存
-@tanstack/react-query
+---
 
-TanStack Query 官方文档说明它用于获取、缓存、同步和更新服务端状态，适合本项目中的列表、详情、筛选结果和局部刷新。
+# 4. 技术选型
 
-文件上传交互
-react-dropzone
+---
 
-react-dropzone 官方文档将其描述为 React 文件拖拽上传组件，适合原始数据上传页和附件上传页。
+## 4.1 前端技术栈
 
-图表
-echarts
-echarts-for-react（React 封装）
+### 核心框架
 
-Apache ECharts 官方文档将其描述为功能强、可交互、可定制的数据可视化图表库，适合首页看板、结果趋势和统计模块。
+* **Next.js**
+* **TypeScript**
 
-CSV 前端预览
-papaparse
+### UI 组件库
 
-Papa Parse 官方文档支持本地 CSV 解析、流式处理、worker 线程处理和 JSON/CSV 转换，适合前端做上传前预览和导出格式处理。
+* **Ant Design**
 
-5.2 后端
-应用框架
-Next.js App Router
-Route Handlers
-Server Actions
+### 日期处理
 
-本项目不拆独立后端服务，直接用 Next.js 的全栈能力完成接口和服务端逻辑。
+* **dayjs**
 
-ORM
-Prisma ORM
+### 表单和数据校验
 
-Prisma 官方文档说明其提供声明式 schema、类型安全开发体验和自动化迁移；并且支持 MySQL 连接器。
+* 页面层：**Ant Design Form**
+* 服务端请求校验：**Zod**
 
-认证
-Auth.js
+### 原因
 
-Auth.js 官方文档说明其可在 Next.js 中通过 auth.ts 和 App Router Route Handler 集成，并可在 Middleware、Server Components、Route Handlers 中使用。对于本项目，建议使用 Credentials 登录方式，避免依赖第三方 OAuth 或邮件服务。
+选择以上方案的原因：
 
-队列与后台任务
-BullMQ
-ioredis
+1. Next.js 成熟，适合前后端一体项目
+2. TypeScript 能统一前后端数据类型
+3. Ant Design 后台组件成熟，Codex 易生成
+4. Ant Design 自带 Form、Table、Upload、Image、Modal、Tabs、Tag 等，避免重复造轮子
+5. Zod 可用于接口入参校验，减少后端隐式错误
 
-BullMQ 是构建在 Redis 上的成熟 Node.js 队列系统，适合本地解析任务的排队、执行、失败重试和状态追踪。
+---
 
-Python 脚本调用
-Node.js child_process
-Python 3 本地环境
-你已有的数据清洗脚本
+## 4.2 后端技术栈
 
-这里不重新实现算法，直接由 Worker 调用现有 Python 脚本，读取本地原始文件，输出结构化 JSON，再回写 MySQL。
+### 核心方案
 
-5.3 数据与基础服务
-数据库
-MySQL 8.x
-缓存 / 队列后端
-Redis 7.x
-文件存储
-服务器本地目录
-不使用 MinIO
-不使用 S3
-不使用任何云对象存储
-本地运维
-推荐 Docker Compose
-也支持直接本机安装 MySQL / Redis / Python / Node.js
-6. 为什么选这套，不选别的
-6.1 不选 Ant Design / MUI 作为主 UI 框架
+* **Next.js Route Handlers**
+* **Prisma ORM**
 
-原因：
+### 原因
 
-容易把后台做成重型组件驱动项目
-样式覆盖成本高
-与你希望的“简洁、可控、易维护”不完全一致
-结论
-用 shadcn/ui 做基础组件
-用 Tailwind 控制风格
-组件代码进项目，可控性更高
+1. 前后端统一在一个项目中，减少部署复杂度
+2. Prisma 与 MySQL 配合成熟
+3. Prisma 能自动管理数据模型、迁移和类型定义
+4. 不需要单独再起一个 FastAPI/Django 服务，减少本地服务数量
 
-shadcn/ui 官方文档明确说明它不是传统黑盒组件库，而是开放源码、可自定义的组件分发方式。
+---
 
-6.2 不选 Sequelize / TypeORM
+## 4.3 数据库
 
-原因：
+### 选型
 
-Prisma 的类型推导、schema 和迁移体验更适合让 Codex 生成稳定代码
-对 MySQL 支持清晰
-Prisma Studio 也适合本地调试
+* **MySQL**
 
-Prisma 官方文档持续强调其 schema、type-safe 开发体验与迁移能力。
+### 连接信息
 
-6.3 不手搓认证
+```env
+DATABASE_URL="mysql://eln:admin123456@192.168.10.22:3306/eln"
+```
 
-原因：
+### 原因
 
-登录、会话、路由保护属于高风险通用基础能力
-必须用成熟方案
-结论
-统一使用 Auth.js
-首版只做本地账号密码登录
-用户表在 MySQL
-密码 hash 存储
+* 你已明确指定使用 MySQL
+* 业务数据高度结构化
+* 适合样品、批次、记录、图片元数据等关系建模
+* 与 Prisma 适配成熟
 
-Auth.js 官方文档已经覆盖 Next.js 集成方式，适合直接复用。
+---
 
-6.4 不手搓任务系统
+## 4.4 文件与图片存储
 
-原因：
+### 当前阶段方案
 
-原始文件解析天然是异步任务
-如果手写数据库轮询 + 状态推进 + 重试，很容易失控
-结论
-用 BullMQ + Redis
-都在本地运行
-Worker 单独进程执行 Python 脚本
+* **本地文件系统**
+* 或 **本地局域网 NAS 挂载目录**
 
-BullMQ 的 Queue / Worker 模式正适合这个场景。
+### 建议目录结构
 
-7. 项目目录结构
+```text
+/storage
+  /images
+    /2026
+      /04
+        /sample
+        /test
+        /process
+  /attachments
+    /2026
+      /04
+        /csv
+        /txt
+```
 
-建议采用单仓库结构：
+### 存储策略
 
-eln-lims/
+数据库不直接存二进制文件，只保存：
+
+* 文件路径
+* 缩略图路径
+* 原始文件名
+* 文件大小
+* MIME 类型
+* 关联对象 ID
+
+### 原因
+
+* 简单稳定
+* 本地实验室可控
+* 便于备份
+* 不依赖云对象存储
+* 不引入 MinIO 也能满足当前需求
+
+---
+
+## 4.5 鉴权与登录
+
+### 建议方案
+
+* **NextAuth.js**（本地 Credentials 登录模式）
+
+### 原因
+
+* 成熟
+* 社区文档完善
+* 不需要手写 Session 体系
+* 可以基于数据库用户表做用户名密码登录
+
+### 当前阶段登录方式
+
+* 用户名 + 密码
+* 本地账户体系
+* 角色控制：管理员 / 实验员 / 只读用户
+
+---
+
+# 5. 本地部署架构
+
+## 5.1 部署原则
+
+所有服务都在本地或内网环境运行，不依赖任何云服务。
+
+## 5.2 部署组成
+
+本系统本地部署只包含三类资源：
+
+1. Web 应用服务
+2. MySQL 数据库
+3. 文件存储目录
+
+## 5.3 推荐部署方式
+
+### 方式一：直接进程部署
+
+适合小型实验室最简方案：
+
+* Node.js 运行 Next.js
+* MySQL 使用已有远程库
+* 文件存储目录挂载到本地服务器
+
+### 方式二：Docker Compose 本地部署
+
+适合后续规范化部署：
+
+* app 容器：Next.js
+* db：如果后续需要本地自建 MySQL，可加入
+* volume：挂载 `/storage`
+
+当前按你的条件，数据库已经存在，因此可先不容器化数据库，只容器化 Web 服务。
+
+---
+
+# 6. 项目目录结构建议
+
+建议 Codex 按以下方式组织项目，不要过度抽象。
+
+```text
+project-root/
 ├─ app/
-│  ├─ (dashboard)/
-│  │  ├─ page.tsx
-│  │  ├─ samples/
-│  │  ├─ alloy-designs/
-│  │  ├─ arc-melting/
-│  │  ├─ spinning/
-│  │  ├─ post-treatments/
-│  │  ├─ performance-tests/
-│  │  ├─ raw-files/
-│  │  ├─ templates/
-│  │  ├─ dictionaries/
-│  │  └─ recycle-bin/
-│  ├─ api/
-│  │  ├─ auth/[...nextauth]/route.ts
-│  │  ├─ samples/route.ts
-│  │  ├─ alloy-designs/route.ts
-│  │  ├─ arc-melting/route.ts
-│  │  ├─ spinning/route.ts
-│  │  ├─ post-treatments/route.ts
-│  │  ├─ performance-tests/route.ts
-│  │  ├─ raw-files/route.ts
-│  │  ├─ uploads/route.ts
-│  │  └─ jobs/route.ts
-│  ├─ login/page.tsx
-│  └─ layout.tsx
+│  ├─ (auth)/
+│  │  └─ login/
+│  ├─ dashboard/
+│  ├─ alloys/
+│  ├─ arc-batches/
+│  ├─ spinning-batches/
+│  ├─ samples/
+│  ├─ post-treatments/
+│  ├─ tests/
+│  ├─ images/
+│  ├─ dictionary/
+│  ├─ users/
+│  └─ api/
+│     ├─ auth/
+│     ├─ alloys/
+│     ├─ arc-batches/
+│     ├─ spinning-batches/
+│     ├─ samples/
+│     ├─ post-treatments/
+│     ├─ tests/
+│     ├─ images/
+│     ├─ dictionary/
+│     └─ users/
 ├─ components/
-│  ├─ ui/                    # shadcn/ui 组件
 │  ├─ layout/
+│  ├─ common/
 │  ├─ forms/
 │  ├─ tables/
-│  ├─ charts/
-│  └─ business/
+│  └─ images/
 ├─ lib/
-│  ├─ auth/
-│  ├─ prisma/
-│  ├─ redis/
-│  ├─ queue/
-│  ├─ storage/
+│  ├─ prisma.ts
+│  ├─ auth.ts
+│  ├─ db/
 │  ├─ validators/
-│  ├─ permissions/
-│  ├─ constants/
-│  └─ utils/
-├─ services/
-│  ├─ sample.service.ts
-│  ├─ alloy-design.service.ts
-│  ├─ arc-melting.service.ts
-│  ├─ spinning.service.ts
-│  ├─ post-treatment.service.ts
-│  ├─ performance-test.service.ts
-│  ├─ raw-file.service.ts
-│  └─ job.service.ts
+│  ├─ utils/
+│  └─ constants/
 ├─ prisma/
 │  ├─ schema.prisma
-│  ├─ migrations/
-│  └─ seed.ts
-├─ worker/
-│  ├─ index.ts
-│  ├─ queues/
-│  ├─ processors/
-│  └─ python/
-├─ scripts/
-│  ├─ parse_raw_data.py
-│  └─ ...
-├─ uploads/
-│  ├─ raw-data/
-│  ├─ attachments/
-│  └─ qrcode/
+│  └─ migrations/
 ├─ public/
+├─ storage/           # 本地开发时可用，生产建议挂载外部目录
+├─ styles/
+├─ types/
 ├─ package.json
-├─ docker-compose.yml
-├─ .env
-└─ README.md
-8. 核心技术模块设计
-8.1 认证与权限
-方案
-使用 Auth.js
-使用 Credentials Provider
-用户数据放 MySQL
-会话使用 Auth.js 默认机制
-角色：实验人员 / 管理员 / 负责人
-不做的事情
-不接入微信、Google、GitHub 登录
-不接入邮件登录
-不接入短信验证码
-不手写 JWT 登录系统
-路由保护
-Middleware 做基础登录校验
-页面层做角色显示控制
-服务端做最终权限校验
-8.2 数据访问层
-方案
-使用 Prisma
-所有数据库访问统一通过 Prisma Client
-业务层不直接写裸 SQL，除非复杂统计确有必要
-所有迁移使用 Prisma Migrate
-本地查看数据使用 Prisma Studio
+└─ .env
+```
 
-Prisma 文档支持 MySQL 连接器，并提供 migration 工具链。
+---
 
-规则
-Controller/Route Handler 不直接写复杂业务
-复杂业务写入 services/*
-Prisma 访问收敛在 service 层或 repository 风格封装中
-8.3 表单与校验
-方案
-页面表单全部用 react-hook-form
-所有 schema 全部用 zod
-前后端共用 schema
-Route Handler 入参也走 Zod 校验
-原则
-不手写零散 if/else 校验
-不把表单规则散落在 UI 组件里
-自动计算字段与用户输入字段分开管理
+# 7. 分层设计
 
-shadcn/ui 官方文档也直接提供与 React Hook Form 配合的表单模式。
+为了让 Codex 易实现，同时保持可维护性，建议采用轻量分层。
 
-8.4 表格与筛选
-方案
-所有列表页统一用 TanStack Table
-列定义集中管理
-支持：
-排序
-分页
-搜索
-列显隐
-行选择
-批量操作
-原则
-不自己手搓表格状态系统
-不为每个页面写一套新的表格逻辑
-8.5 文件上传与本地存储
-方案
-前端上传：react-dropzone
-后端接收：Next.js Route Handler
-存储介质：本地目录
-文件索引：MySQL 表
-目录约定
-/uploads/raw-data/
-/uploads/attachments/
-/uploads/qrcode/
-数据库存储
+## 7.1 分层结构
 
-文件表只保存：
+### 表现层
 
-原始文件名
-存储路径
-MIME 类型
-文件大小
-哈希值（可选）
-关联样品 UUID
-上传人
-上传时间
-解析状态
-规则
-不使用云对象存储
-不使用 MinIO，除非后续规模扩大
-不把二进制文件塞进数据库 BLOB
-8.6 原始数据解析与后台任务
-推荐方案
-上传完成后创建解析任务
-使用 BullMQ 把任务写入 Redis
-worker 进程消费任务
-worker 调用本地 Python 脚本
-脚本读取文件，输出结构化结果
-worker 将结果回写 MySQL
-前端读取状态并刷新
-任务状态
-pending
-processing
-success
-failed
-重试策略
-解析失败允许重试
-重试次数可配置
-保留错误摘要和 stderr
-为什么必须这么做
+* Next.js 页面
+* Ant Design UI 组件
+* 页面表单、列表、详情
 
-因为“原始文件解析”天然不是同步页面动作。
-如果直接在请求中做完整 Python 解析，容易出现：
+### 接口层
 
-超时
-页面阻塞
-错误难追踪
-状态不可观察
+* Route Handlers
+* 接收请求、参数校验、权限校验、返回响应
 
-BullMQ 的本地 Queue / Worker 方案更稳。
+### 业务层
 
-8.7 图表与统计看板
-方案
-首页和详情页图表统一用 ECharts
-不自己封装 SVG 图表引擎
-不手工写 canvas 图表逻辑
-适用图表
-柱状图：月度新增记录
-折线图：测试结果趋势
-饼图：状态分布
-散点图：部分性能指标对比
+* 业务规则处理
+* 失败原因校验
+* 自动计算逻辑
+* 显示别名生成
+* 文件元数据写入
 
-Apache ECharts 官方文档强调其交互性和可定制性，足够支撑后台统计看板。
+### 数据访问层
 
-8.8 CSV 预览与导出
-方案
-前端 CSV 预览：Papa Parse
-后端导出：Node.js 生成 CSV / Excel
-Excel 生成推荐：exceljs
-原则
-不手写 CSV 解析器
-不手工处理分隔符和转义边界情况
+* Prisma ORM
+* 对 MySQL 进行 CRUD
 
-Papa Parse 已支持本地文件解析、流式处理、worker 线程等能力。
+---
 
-9. 数据库实施建议
-9.1 数据库
-本地部署 MySQL 8.x
-字符集：utf8mb4
-时区统一
-所有表必须有：
-id
-uuid
-created_at
-updated_at
-deleted_at（软删除）
-created_by
-updated_by
-9.2 Prisma 约束
-所有表结构由 schema.prisma 管理
-所有变更必须通过 migration
-不允许手工改正式表结构而不回写 migration
-9.3 软删除
+## 7.2 不建议的做法
 
-首版默认软删除，避免误删。
+Codex 不要做以下过度设计：
 
-10. 服务边界
-10.1 Web 服务职责
-页面渲染
-用户登录
-CRUD 接口
-文件上传
-任务提交
-详情页数据聚合
-10.2 Worker 服务职责
-消费队列
-调用 Python 脚本
-解析文件
-写入解析结果
-记录失败日志
-10.3 MySQL 职责
-存储业务主数据
-存储文件索引
-存储解析结果
-存储审计日志
-存储字典和模板
-10.4 Redis 职责
-仅用于队列系统
-不作为业务主存储
-不承担长期数据责任
-11. 本地开发与部署方案
-11.1 推荐运行方式
+* 不要做 Repository + Service + Domain + Factory 多层套娃
+* 不要做 CQRS
+* 不要引入 EventBus
+* 不要做自定义 ORM 包装层
+* 不要做过度的泛型 CRUD 框架
 
-推荐使用 Docker Compose 本地编排：
+---
 
-web
-worker
-mysql
-redis
-原因
-最接近真实交付环境
-团队机器环境一致
-易于 Codex 输出标准化启动说明
-11.2 本地文件挂载
+# 8. 数据模型设计
 
-必须挂载本地目录：
+下面是技术层面的核心表设计。
 
-./uploads:/app/uploads
-11.3 Python 环境
-本地容器内安装 Python 3
-安装你已有脚本所需依赖
-Worker 中通过 child_process.spawn 调用
-12. 推荐依赖清单
+---
 
-下面这份可以直接作为 package.json 设计依据。
+## 8.1 users
 
-12.1 前端 / 全栈
-next
-react
-react-dom
-typescript
-tailwindcss
-class-variance-authority
-clsx
-tailwind-merge
-lucide-react
-sonner
-12.2 UI
-shadcn/ui 生成的本地组件
-@radix-ui/*（由 shadcn/ui 依赖）
-12.3 表单与校验
-react-hook-form
-zod
-@hookform/resolvers
-12.4 表格与请求
-@tanstack/react-table
-@tanstack/react-query
-12.5 认证
-next-auth / Auth.js
-bcrypt 或 bcryptjs
-12.6 数据
-prisma
-@prisma/client
-12.7 队列
-bullmq
-ioredis
-12.8 文件 / 导出 / 工具
-react-dropzone
-papaparse
-qrcode
-exceljs
-dayjs
-nanoid（仅用于非主业务 UUID 场景）
-mime / mime-types
-12.9 图表
-echarts
-echarts-for-react
-13. 不采用的技术
+用于用户登录和权限控制。
 
-首版明确不采用：
+### 字段建议
 
-MongoDB
-MinIO
-S3
-Supabase
-Firebase
-Clerk
-Auth0
-第三方邮件服务
-云函数
-SaaS 队列服务
-手写 JWT 鉴权系统
-手写 ORM
-手写动态表单引擎
-手写表格引擎
-手写图表库
-14. 给 Codex 的明确技术约束
+* id
+* uuid
+* username
+* password_hash
+* real_name
+* role
+* status
+* created_at
+* updated_at
 
-下面这段建议你直接给 Codex。
+### role 枚举
 
-请严格按以下技术方案实现，不要擅自替换为其他体系：
+* ADMIN
+* OPERATOR
+* VIEWER
 
-一、总体要求
-1. 所有服务均本地运行，不使用任何云服务
-2. 不重复造轮子，优先使用成熟开源框架和组件
-3. 代码必须适合长期维护，不要生成一次性脚手架垃圾代码
+---
 
-二、前端与全栈
-1. 使用 Next.js App Router + TypeScript
-2. 使用 Tailwind CSS
-3. 使用 shadcn/ui 作为基础 UI 组件体系
-4. 使用 lucide-react 作为图标库
-5. 使用 React Hook Form + Zod 处理所有表单和校验
-6. 使用 TanStack Table 处理所有表格
-7. 使用 TanStack Query 处理客户端数据请求与缓存
-8. 使用 react-dropzone 实现上传拖拽交互
-9. 使用 ECharts 实现看板图表
-10. 使用 Papa Parse 实现 CSV 预览解析
+## 8.2 alloy_designs
 
-三、后端
-1. 不拆独立 Java/Spring/FastAPI 后端
-2. 使用 Next.js Route Handlers 和 Server Actions
-3. 使用 Prisma 作为唯一 ORM
-4. 使用 MySQL 作为唯一业务数据库
-5. 使用 Auth.js 处理登录与会话
-6. 用户登录先实现本地账号密码模式
-7. 所有接口入参都必须通过 Zod 校验
+成分设计表。
 
-四、后台任务
-1. 原始数据解析必须使用 BullMQ + Redis
-2. Redis 本地部署，不允许使用云 Redis
-3. 单独实现 worker 进程消费任务
-4. worker 调用本地 Python 脚本完成数据解析
-5. 解析状态必须可追踪：pending / processing / success / failed
-6. 必须支持失败重试和错误日志记录
+### 字段建议
 
-五、文件存储
-1. 所有上传文件都存储到本地目录
-2. 不使用 MinIO，不使用任何对象存储云服务
-3. 文件元信息和业务绑定关系存储在 MySQL 中
-4. 不允许把大文件内容直接存入数据库
+* id
+* uuid
+* code
+* composition_json
+* total_percent
+* remark
+* created_by
+* created_at
+* updated_at
 
-六、禁止事项
-1. 不要手写认证系统
-2. 不要手写队列系统
-3. 不要手写表格系统
-4. 不要手写表单状态机
-5. 不要手写 CSV 解析器
-6. 不要混用多个大型 UI 框架
-7. 不要引入与本方案无关的云服务依赖
-15. 最终落地建议
+### 说明
 
-这套技术方案的核心是：
+`composition_json` 保存元素及其原子百分比，例如：
 
-Next.js 负责全栈主应用
-Prisma + MySQL 负责业务数据
-Auth.js 负责认证
-BullMQ + Redis 负责异步解析
-本地文件系统负责上传存储
-Python 脚本复用现有算法
-shadcn/ui + RHF + Zod + TanStack Table 负责后台 UI 基础能力
+```json
+[
+  { "element": "Co", "percent": 40 },
+  { "element": "Fe", "percent": 30 },
+  { "element": "Si", "percent": 10 },
+  { "element": "B", "percent": 20 }
+]
+```
+
+---
+
+## 8.3 arc_melting_batches
+
+熔炼批次表。
+
+### 字段建议
+
+* id
+* uuid
+* batch_no
+* alloy_design_id
+* melting_date
+* target_weight
+* ingot_weight
+* melting_point
+* loss_rate
+* status
+* failure_reason_id
+* remark
+* created_by
+* created_at
+* updated_at
+
+---
+
+## 8.4 spinning_batches
+
+拉丝批次表。
+
+### 字段建议
+
+* id
+* uuid
+* batch_no
+* alloy_design_id
+* arc_batch_id
+* spinning_date
+* glass_tube_diameter
+* feed_weight
+* spinning_temperature
+* winding_speed_rpm
+* cooling_water_temp
+* negative_pressure_kpa
+* coated_wire_diameter_um
+* bare_wire_diameter_um
+* glass_etch_time
+* glass_thickness_um
+* need_magnetic_test
+* status
+* failure_reason_id
+* remark
+* created_by
+* created_at
+* updated_at
+
+---
+
+## 8.5 samples
+
+样品表，是追溯核心表。
+
+### 字段建议
+
+* id
+* uuid
+* sample_no
+* display_name
+* alloy_design_id
+* arc_batch_id
+* spinning_batch_id
+* state
+* bare_wire_diameter_um
+* coated_wire_diameter_um
+* is_welded_2cm
+* sample_index
+* remark
+* created_by
+* created_at
+* updated_at
+
+### state 枚举
+
+* GC
+* GR
+
+---
+
+## 8.6 post_treatment_records
+
+后处理记录表。
+
+### 字段建议
+
+* id
+* uuid
+* sample_id
+* treatment_type
+* treatment_params_json
+* status
+* failure_reason_id
+* remark
+* created_by
+* treated_at
+* created_at
+* updated_at
+
+### 说明
+
+后处理参数不建议拆成很多稀疏列，当前阶段可使用：
+
+* 固定公共字段
+* 可变参数 JSON
+
+例如：
+
+```json
+{
+  "current_type": "DC",
+  "current_density": 12.5,
+  "current_ma": 20.1,
+  "duration_min": 10,
+  "duty_cycle": 50,
+  "frequency_hz": 1000
+}
+```
+
+这样能减少表结构频繁调整，但不是在做动态表单引擎，只是技术上的参数收纳。
+
+---
+
+## 8.7 test_records
+
+性能测试记录表。
+
+### 字段建议
+
+* id
+* uuid
+* record_no
+* sample_id
+* test_date
+* operator_id
+* instrument_id
+* test_condition
+* key_results
+* raw_file_attachment_id
+* status
+* failure_reason_id
+* remark
+* created_at
+* updated_at
+
+---
+
+## 8.8 image_assets
+
+图片资源表。
+
+### 字段建议
+
+* id
+* uuid
+* file_name
+* original_name
+* storage_path
+* thumbnail_path
+* file_size
+* mime_type
+* category
+* stage
+* related_type
+* related_id
+* sample_id
+* test_record_id
+* tags_json
+* remark
+* captured_at
+* uploaded_by
+* created_at
+* updated_at
+
+### related_type 建议值
+
+* SAMPLE
+* ARC_BATCH
+* SPINNING_BATCH
+* TEST_RECORD
+
+### 说明
+
+这样不需要为每种图片关联单独建很多表。
+
+---
+
+## 8.9 attachments
+
+附件表，用于 CSV/TXT 等原始文件。
+
+### 字段建议
+
+* id
+* uuid
+* file_name
+* original_name
+* storage_path
+* file_size
+* mime_type
+* related_type
+* related_id
+* uploaded_by
+* created_at
+
+---
+
+## 8.10 dictionary_items
+
+数据字典表。
+
+### 字段建议
+
+* id
+* uuid
+* dict_type
+* dict_label
+* dict_value
+* sort_order
+* status
+* created_at
+* updated_at
+
+### dict_type 示例
+
+* FAILURE_REASON
+* USER_NAME
+* INSTRUMENT
+* IMAGE_CATEGORY
+* SAMPLE_STATE
+* POST_TREATMENT_TYPE
+* TEST_TYPE
+
+---
+
+## 8.11 operation_logs
+
+操作日志表。
+
+### 字段建议
+
+* id
+* uuid
+* module
+* operation_type
+* related_type
+* related_id
+* operator_id
+* content
+* created_at
+
+---
+
+# 9. Prisma 建模原则
+
+## 9.1 原则
+
+* 所有表使用 `id` 作为主键
+* `uuid` 作为业务唯一标识
+* 外键关系明确
+* 创建时间、更新时间统一管理
+* JSON 字段只用于参数类和标签类结构，不滥用
+
+## 9.2 建议统一字段
+
+每张核心业务表至少包含：
+
+* id
+* uuid
+* created_at
+* updated_at
+
+## 9.3 索引建议
+
+重点加索引字段：
+
+### samples
+
+* display_name
+* sample_no
+* alloy_design_id
+* arc_batch_id
+* spinning_batch_id
+
+### image_assets
+
+* sample_id
+* category
+* stage
+* captured_at
+* uploaded_by
+
+### test_records
+
+* sample_id
+* test_date
+
+### arc_melting_batches
+
+* batch_no
+* melting_date
+
+### spinning_batches
+
+* batch_no
+* spinning_date
+
+---
+
+# 10. 页面与接口设计
+
+---
+
+## 10.1 页面路由
+
+```text
+/login
+/dashboard
+/alloys
+/alloys/new
+/arc-batches
+/arc-batches/new
+/spinning-batches
+/spinning-batches/new
+/samples
+/samples/new
+/samples/[id]
+/post-treatments
+/post-treatments/new
+/tests
+/tests/new
+/images
+/dictionary
+/users
+```
+
+---
+
+## 10.2 API 路由建议
+
+```text
+/api/auth/login
+/api/auth/logout
+/api/auth/session
+
+/api/alloys
+/api/alloys/[id]
+
+/api/arc-batches
+/api/arc-batches/[id]
+
+/api/spinning-batches
+/api/spinning-batches/[id]
+
+/api/samples
+/api/samples/[id]
+
+/api/post-treatments
+/api/post-treatments/[id]
+
+/api/tests
+/api/tests/[id]
+
+/api/images
+/api/images/upload
+/api/images/[id]
+
+/api/dictionary
+/api/dictionary/[id]
+
+/api/users
+/api/users/[id]
+```
+
+---
+
+## 10.3 API 风格要求
+
+* 使用 REST 风格
+* 列表查询支持 query 参数
+* 新建使用 POST
+* 编辑使用 PUT / PATCH
+* 删除使用 DELETE
+* 返回统一 JSON 结构
+
+### 返回格式建议
+
+```json
+{
+  "success": true,
+  "message": "ok",
+  "data": {}
+}
+```
+
+错误时：
+
+```json
+{
+  "success": false,
+  "message": "参数错误",
+  "errors": {
+    "field": "xxx"
+  }
+}
+```
+
+---
+
+# 11. 前端页面实现规范
+
+## 11.1 页面统一结构
+
+每个页面统一采用：
+
+1. 页面标题区
+2. 操作按钮区
+3. 筛选区
+4. 内容区
+5. 分页区
+
+## 11.2 列表页统一组件
+
+使用：
+
+* `Card`
+* `Form`
+* `Input`
+* `Select`
+* `DatePicker`
+* `Button`
+* `Table`
+* `Pagination`
+
+## 11.3 表单页统一组件
+
+使用：
+
+* `Form`
+* `Input`
+* `InputNumber`
+* `Select`
+* `Radio`
+* `DatePicker`
+* `Upload`
+* `Card`
+* `Button`
+
+## 11.4 图片页统一组件
+
+使用：
+
+* `Upload`
+* `Image`
+* `Image.PreviewGroup`
+* `Card`
+* `Tag`
+
+---
+
+# 12. 文件上传设计
+
+## 12.1 上传流程
+
+1. 前端选择文件
+2. 调用 `/api/images/upload` 或 `/api/attachments/upload`
+3. 服务端校验文件类型和大小
+4. 保存到本地目录
+5. 将元数据写入数据库
+6. 返回文件记录 ID 与访问地址
+
+## 12.2 图片限制
+
+建议限制：
+
+* jpg
+* jpeg
+* png
+* webp
+
+## 12.3 附件限制
+
+建议支持：
+
+* csv
+* txt
+
+## 12.4 文件命名规则
+
+为防止重名，建议统一命名：
+
+```text
+{uuid}_{timestamp}.{ext}
+```
+
+例如：
+
+```text
+3f9c2b1d_1712041200.jpg
+```
+
+## 12.5 缩略图策略
+
+当前阶段建议：
+
+* 上传原图后立即生成缩略图
+* 使用成熟库处理，不自己实现图片算法
+
+建议库：
+
+* **sharp**
+
+---
+
+# 13. 业务规则实现要求
+
+---
+
+## 13.1 失败原因强制校验
+
+以下模块在状态为失败时，必须填写失败原因：
+
+* 熔炼批次
+* 拉丝批次
+* 后处理记录
+* 性能测试记录
+
+这个规则必须同时在：
+
+* 前端表单层
+* 后端接口层
+  都校验一次。
+
+---
+
+## 13.2 成分比例校验
+
+成分设计中元素原子分数总和必须等于 100。
+
+校验方式：
+
+* 前端实时汇总校验
+* 后端再次校验，避免绕过前端提交
+
+---
+
+## 13.3 自动计算字段
+
+以下字段由系统自动计算：
+
+### 熔炼损耗率
+
+```text
+(target_weight - ingot_weight) / target_weight * 100%
+```
+
+### 玻璃层厚度
+
+```text
+(coated_wire_diameter_um - bare_wire_diameter_um) / 2
+```
+
+### 电流大小
+
+```text
+current_density * π * (bare_wire_diameter / 2)^2
+```
+
+### 拉伸力
+
+```text
+(weight * 9.8) / cross_section_area
+```
+
+这些字段应：
+
+* 前端展示即时结果
+* 后端最终重新计算后入库
+* 不依赖前端直接传值作为真值
+
+---
+
+## 13.4 显示别名生成
+
+显示别名由系统根据已选字段自动生成。
+前端可预览，后端保存前再次生成。
+
+---
+
+# 14. 权限设计
+
+## 14.1 角色
+
+* ADMIN
+* OPERATOR
+* VIEWER
+
+## 14.2 权限矩阵
+
+### ADMIN
+
+* 所有页面可见
+* 所有数据可增删改查
+* 可管理字典与用户
+
+### OPERATOR
+
+* 可查看全部业务数据
+* 可新增、编辑实验记录和图片
+* 不可管理用户
+
+### VIEWER
+
+* 仅查看和检索
+* 不可新增、编辑、删除
+
+## 14.3 前后端权限控制
+
+权限控制不能只放前端，必须：
+
+* 前端控制按钮可见性
+* 后端接口控制实际操作权限
+
+---
+
+# 15. 日志与审计
+
+## 15.1 操作日志范围
+
+建议记录以下操作：
+
+* 新建
+* 编辑
+* 删除
+* 上传图片
+* 上传附件
+* 修改字典
+* 修改用户
+
+## 15.2 日志内容
+
+包括：
+
+* 操作人
+* 模块
+* 操作类型
+* 关联对象
+* 时间
+* 变更摘要
+
+---
+
+# 16. 本地环境配置
+
+## 16.1 基础依赖
+
+* Node.js 20+
+* npm 或 pnpm
+* MySQL 客户端访问权限
+* 本地可写文件目录
+
+## 16.2 环境变量建议
+
+```env
+NODE_ENV=development
+
+DATABASE_URL="mysql://eln:admin123456@192.168.10.22:3306/eln"
+
+NEXTAUTH_SECRET="replace-with-local-secret"
+NEXTAUTH_URL="http://localhost:3000"
+
+UPLOAD_DIR="./storage"
+MAX_FILE_SIZE=10485760
+```
+
+---
+
+# 17. 推荐开源依赖清单
+
+以下都是成熟组件，Codex 优先直接使用，不要自研。
+
+## 17.1 Web 框架
+
+* next
+* react
+* react-dom
+* typescript
+
+## 17.2 UI
+
+* antd
+* @ant-design/icons
+
+## 17.3 数据与校验
+
+* prisma
+* @prisma/client
+* zod
+
+## 17.4 鉴权
+
+* next-auth
+
+## 17.5 日期
+
+* dayjs
+
+## 17.6 文件处理
+
+* sharp
+* form-data 相关生态按 Next.js 标准方式处理
+
+## 17.7 密码处理
+
+* bcryptjs
+
+## 17.8 工具库
+
+* uuid
+* lodash-es
+
+---
+
+# 18. Codex 开发约束
+
+这是最关键的一部分，直接限制 Codex 的实现边界。
+
+## 18.1 必须遵守
+
+* 使用 Next.js + TypeScript + Ant Design + Prisma + MySQL
+* 使用成熟开源组件
+* 使用本地文件存储
+* 所有核心实体有 uuid
+* 所有失败状态必须校验失败原因
+* 所有自动计算字段后端重新计算
+* 所有上传文件元数据必须入库
+
+## 18.2 禁止事项
+
+* 不要引入微服务
+* 不要引入 Redis、Kafka、MQ、Celery
+* 不要引入 MongoDB
+* 不要实现动态表单引擎
+* 不要实现自定义状态管理框架
+* 不要造表格、上传、图片预览轮子
+* 不要做复杂插件化架构
+* 不要做过度抽象的 service/repository/domain 多层框架
+
+## 18.3 代码风格要求
+
+* 目录清晰
+* 组件拆分适中
+* 不做无意义封装
+* 表单、表格、详情页复用通用组件
+* API 层统一错误返回格式
+* 数据库访问统一走 Prisma
+
+---
+
+# 19. 开发顺序建议
+
+---
+
+## 第一阶段
+
+1. 项目初始化
+2. Prisma schema 建立
+3. 用户登录
+4. 基础布局
+5. 数据字典
+6. 成分设计
+7. 熔炼批次
+8. 拉丝批次
+9. 样品管理
+
+## 第二阶段
+
+10. 后处理记录
+11. 性能测试记录
+12. 图片上传与图片中心
+13. 样品详情页追溯整合
+
+## 第三阶段
+
+14. 操作日志
+15. 列表筛选优化
+16. 文件下载与预览完善
+17. 本地部署打包
+
+---
+
+# 20. MVP 交付标准
+
+系统达到以下标准即可认为首版可用：
+
+* 能登录
+* 能管理成分、熔炼、拉丝、样品
+* 能录入后处理与测试记录
+* 能上传图片并关联样品/记录
+* 能查看样品详情和图片
+* 能按条件查询
+* 能进行基础权限控制
+* 能在本地部署运行
+
+---
+
+# 21. 最终推荐方案总结
+
+本项目最终技术路线如下：
+
+## 前端
+
+* Next.js
+* TypeScript
+* Ant Design
+* dayjs
+
+## 后端
+
+* Next.js Route Handlers
+* Prisma
+* Zod
+
+## 数据库
+
+* MySQL
+
+## 文件存储
+
+* 本地文件系统 
+
+## 鉴权
+
+* NextAuth.js（Credentials 模式）
+
+## 图片处理
+
+* sharp
+
+## 部署
+
+* 本地服务器
+* 不使用云服务
+* 单体应用部署
+
+---
+
+如果你愿意，我下一步可以直接接着给你输出两份最实用的开发材料之一：
+
+1. **Prisma Schema 初稿**
+2. **给 Codex 的开发任务拆解清单（按页面、接口、数据表拆分）**
